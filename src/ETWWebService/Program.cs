@@ -11,8 +11,9 @@ namespace ETWWebService
 {
     internal class Program
     {
+        private static EtwManifestUserDataReader etwManifestUserDataReader = new EtwManifestUserDataReader();
         private static readonly string Url = "http://localhost:5000/";
-        private const string DefaultProvider = "Microsoft-Windows-Kernel-Process";
+        private const string DefaultProvider = "30336ED4-E327-447C-9DE0-51B652C86108";
 
         static async Task Main(string[] args)
         {
@@ -24,7 +25,7 @@ namespace ETWWebService
                 listener.Start();
                 Console.WriteLine($"Listening for requests at {Url}");
                 Console.WriteLine("Usage: http://localhost:5000/?[ETWProviderName]");
-                Console.WriteLine("Example: http://localhost:5000/?Microsoft-Windows-Kernel-Process");
+                Console.WriteLine($"Example: http://localhost:5000/?{DefaultProvider}");
                 Console.WriteLine("Press Ctrl+C to exit");
 
                 while (true)
@@ -51,14 +52,26 @@ namespace ETWWebService
             Console.WriteLine($"Request received from {request.RemoteEndPoint}");
 
             // Extract provider name from query string
-            string providerName = DefaultProvider;
+            string providerInput = DefaultProvider;
             if (request.QueryString.Count > 0 && !string.IsNullOrEmpty(request.QueryString.Keys[0]))
             {
                 // First segment is the provider name
-                providerName = request.QueryString.Keys[0];
+                providerInput = request.QueryString.Keys[0];
             }
 
-            Console.WriteLine($"Using ETW provider: {providerName}");
+            // User can pass in the GUID or provider Name.
+            EtwUserDataSchema etwUserDataSchema;
+            if (Guid.TryParse(providerInput, out Guid providerGuid))
+            {
+                etwUserDataSchema = etwManifestUserDataReader.GetUserDataSchema(providerGuid);
+            }
+            else
+            {
+                Console.WriteLine($"Error: Invalid provider guid '{providerInput}'");
+                return;
+            }
+
+            Console.WriteLine($"Using ETW provider: {providerInput}");
 
             // Set headers for streaming response
             response.ContentType = "text/html";
@@ -71,7 +84,7 @@ namespace ETWWebService
                 {
                     try
                     {
-                        _session.EnableProvider(providerName);
+                        _session.EnableProvider(providerInput);
 
                         using (StreamWriter writer = new StreamWriter(response.OutputStream, Encoding.UTF8))
                         {
@@ -79,7 +92,7 @@ namespace ETWWebService
                             await writer.WriteAsync("<!DOCTYPE html><html><head><title>ETW Event Stream</title>");
                             await writer.WriteAsync("<style>body{font-family:monospace;margin:20px}h1{color:#333}p{margin:5px 0;padding:5px;border-bottom:1px solid #eee}</style>");
                             await writer.WriteAsync("</head><body>");
-                            await writer.WriteAsync($"<h1>ETW Events for Provider: {WebUtility.HtmlEncode(providerName)}</h1>");
+                            await writer.WriteAsync($"<h1>ETW Events for Provider: {WebUtility.HtmlEncode(providerInput)}</h1>");
                             await writer.FlushAsync();
 
                             _session.Source.Dynamic.All += async (TraceEvent data) =>
@@ -105,11 +118,11 @@ namespace ETWWebService
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"Error with ETW provider '{providerName}': {ex.Message}");
+                        Console.WriteLine($"Error with ETW provider '{providerInput}': {ex.Message}");
                         response.StatusCode = 400;
                         using (StreamWriter writer = new StreamWriter(response.OutputStream))
                         {
-                            await writer.WriteAsync($"<html><body><h1>Error</h1><p>Invalid ETW provider name: {WebUtility.HtmlEncode(providerName)}</p>");
+                            await writer.WriteAsync($"<html><body><h1>Error</h1><p>Invalid ETW provider name: {WebUtility.HtmlEncode(providerInput)}</p>");
                             await writer.WriteAsync($"<p>Error details: {WebUtility.HtmlEncode(ex.Message)}</p></body></html>");
                         }
                     }
