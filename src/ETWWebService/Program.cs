@@ -95,11 +95,19 @@ namespace ETWWebService
                             await writer.WriteAsync($"<h1>ETW Events for Provider: {WebUtility.HtmlEncode(providerInput)}</h1>");
                             await writer.FlushAsync();
 
-                            _session.Source.Dynamic.All += async (TraceEvent data) =>
+                            _session.Source.Dynamic.All += async (TraceEvent traceEvent) =>
                             {
+                                var userData = etwManifestUserDataReader.ParseTraceEventUserData(etwUserDataSchema, traceEvent);
+
                                 // Format and store the event information
-                                string eventInfo = $"Provider: {data.ProviderName}, ID: {data.ID}, Time: {data.TimeStamp}, " +
-                                                  $"Process: {data.ProcessID}, Thread: {data.ThreadID}, Event: {data.EventName}";
+                                string eventInfo =
+                                    $"Provider: {traceEvent.ProviderName}, ID: {traceEvent.ID}, Time: {traceEvent.TimeStamp}, " +
+                                    $"Process: {traceEvent.ProcessID}, Thread: {traceEvent.ThreadID}, Event: {traceEvent.EventName}";
+                                    
+                                foreach(var key in userData.Keys)
+                                {
+                                    eventInfo += $", {key}: {userData[key]}";
+                                }
 
                                 try
                                 {
