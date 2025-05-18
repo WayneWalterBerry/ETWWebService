@@ -1,14 +1,21 @@
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
-using Microsoft.Diagnostics.Tracing;
-using Microsoft.Win32;
+// <copyright file="EtwManifestUserDataReader.cs" company="Wayne Walter Berry">
+// Copyright (c) Wayne Walter Berry. All rights reserved.
+// </copyright>
 
 namespace ETWWebService
 {
+    using System;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.ComponentModel;
+    using System.Data.Common;
+    using System.IO;
+    using System.Linq;
+    using System.Runtime.InteropServices;
+    using System.Text;
+    using Microsoft.Diagnostics.Tracing;
+    using Microsoft.Win32;
+
     /// <summary>
     /// Provides functionality to read UserData sections from registered ETW manifests
     /// and parse blob data into structured columns.
@@ -45,32 +52,61 @@ namespace ETWWebService
             IntPtr EventMapInfo,
             ref int BufferSize);
 
+        /// <summary>
+        /// Represents information about a property in an ETW event.
+        /// This structure follows the Windows EVENT_PROPERTY_INFO layout and is part of the data
+        /// returned by TdhGetManifestEventInformation.
+        /// </summary>
         [StructLayout(LayoutKind.Sequential)]
         private struct EVENT_PROPERTY_INFO
         {
+            /// <summary>
+            /// Flags that specify characteristics of the property, such as whether it's a struct,
+            /// has a length parameter, or has a count parameter.
+            /// </summary>
             public PropertyFlags Flags;
+
+            /// <summary>
+            /// Offset from the beginning of the TRACE_EVENT_INFO buffer to the null-terminated 
+            /// Unicode string that contains the property name.
+            /// </summary>
             public uint NameOffset;
+
+            /// <summary>
+            /// The input type of the property as defined in the manifest.
+            /// </summary>
             public EVENT_FIELD_TYPE InType;
+
+            /// <summary>
+            /// The output type of the property after any type conversion is performed.
+            /// </summary>
             public EVENT_FIELD_TYPE OutType;
+
+            /// <summary>
+            /// Offset from the beginning of the TRACE_EVENT_INFO buffer to the null-terminated 
+            /// Unicode string that contains the name of a value map. Only valid if the property
+            /// has a value map; otherwise, this member is 0.
+            /// </summary>
             public uint MapNameOffset;
+
+            /// <summary>
+            /// The number of elements in an array if the property is an array type,
+            /// or the count of a variable-length property.
+            /// </summary>
             public uint Count;
+
+            /// <summary>
+            /// The length of the property in bytes, if it's a fixed-length property.
+            /// </summary>
             public uint Length;
+
+            /// <summary>
+            /// Reserved for future use.
+            /// </summary>
             public uint Reserved;
         }
 
-        [Flags]
-        private enum PropertyFlags : uint
-        {
-            None = 0,
-            Struct = 0x1,
-            ParamLength = 0x2,
-            ParamCount = 0x4,
-            WBEMXMLFragment = 0x8,
-            ParamFixedLength = 0x10,
-            ParamFixedCount = 0x20,
-            HasTags = 0x40,
-            HasCustomSchema = 0x80
-        }
+
 
         private enum EVENT_FIELD_TYPE : ushort
         {
@@ -137,25 +173,16 @@ namespace ETWWebService
             public ulong Keyword;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PROVIDER_EVENT_INFO
+        {
+            public uint NumberOfEvents;
+            public uint Reserved;
+            // Followed by an array of EVENT_DESCRIPTOR structures
+        }
+
         #endregion
 
-        /// <summary>
-        /// Represents a column in the UserData section.
-        /// </summary>
-        public class UserDataColumn
-        {
-            public string Name { get; set; }
-            public Type DataType { get; set; }
-            public int Length { get; set; }
-            public bool IsArray { get; set; }
-            public uint ArrayCount { get; set; }
-            public Dictionary<string, string> EnumValues { get; set; }
-
-            public UserDataColumn()
-            {
-                EnumValues = new Dictionary<string, string>();
-            }
-        }
 
         /// <summary>
         /// Retrieves UserData schema from an ETW manifest by provider GUID.
@@ -166,7 +193,15 @@ namespace ETWWebService
 
             // Get list of events in the provider
             int bufferSize = 0;
-            TdhEnumerateManifestProviderEvents(ref providerGuid, IntPtr.Zero, ref bufferSize);
+            int lResult = TdhEnumerateManifestProviderEvents(ref providerGuid, IntPtr.Zero, ref bufferSize);
+            switch (lResult)
+            {
+                case 2:
+                    // ERROR_FILE_NOT_FOUND
+                    throw new FileNotFoundException($"Provider {providerGuid} not found.");
+                default:
+                    break;
+            }
 
             if (bufferSize > 0)
             {
@@ -174,23 +209,50 @@ namespace ETWWebService
                 try
                 {
                     int result = TdhEnumerateManifestProviderEvents(ref providerGuid, buffer, ref bufferSize);
-                    if (result == 0) // SUCCESS
+                    switch (result)
                     {
-                        // Parse the buffer to get event IDs
-                        // For each event ID, get event schema
-                        // This is simplified - actual implementation needs to parse the buffer structure
-                        // For demonstration, we'll just assume we have event IDs
+                        case 2:
+                            // ERROR_INSUFFICIENT_BUFFER
+                            throw new OutOfMemoryException("Buffer size insufficient for provider events.");
+                        case 87:
+                            // ERROR_INVALID_PARAMETER
+                            throw new ArgumentException("Invalid parameters for TdhEnumerateManifestProviderEvents.");
+                        default:
+                            break;
+                    }
 
-                        // Example event ID
-                        ushort eventId = 1; // This should come from parsing the buffer
+                    // Parse the buffer to get event IDs
+                    // The buffer contains a PROVIDER_EVENT_INFO structure followed by EVENT_DESCRIPTOR array
+                    PROVIDER_EVENT_INFO providerEventInfo = Marshal.PtrToStructure<PROVIDER_EVENT_INFO>(buffer);
+                    int eventCount = (int)providerEventInfo.NumberOfEvents;
+
+                    // Move pointer past the PROVIDER_EVENT_INFO structure to the EVENT_DESCRIPTOR array
+                    IntPtr eventDescriptorsPtr = IntPtr.Add(buffer, Marshal.SizeOf<PROVIDER_EVENT_INFO>());
+
+                    // Process each event
+                    for (int i = 0; i < eventCount; i++)
+                    {
+                        // Extract the EVENT_DESCRIPTOR for this event
+                        IntPtr currentEventDescPtr = IntPtr.Add(eventDescriptorsPtr, i * Marshal.SizeOf<EVENT_DESCRIPTOR>());
+                        EVENT_DESCRIPTOR eventDesc = Marshal.PtrToStructure<EVENT_DESCRIPTOR>(currentEventDescPtr);
+
+                        // Get the event ID
+                        ushort eventId = eventDesc.Id;
+
+                        // Skip events with ID 0 (these are often metadata events)
+                        if (eventId == 0)
+                        {
+                            continue;
+                        }
 
                         // Get columns for this event
                         var columns = GetUserDataColumnsForEvent(providerGuid, eventId);
-                        schemaByEventId.Add(eventId.ToString(), columns);
-                    }
-                    else
-                    {
-                        throw new Win32Exception(result, "Failed to enumerate provider events.");
+
+                        // Only add events that have valid columns
+                        if (columns != null && columns.Count > 0)
+                        {
+                            schemaByEventId[eventId.ToString()] = columns;
+                        }
                     }
                 }
                 finally
@@ -222,51 +284,116 @@ namespace ETWWebService
             IntPtr provGuidPtr = GCHandle.Alloc(providerGuid, GCHandleType.Pinned).AddrOfPinnedObject();
             IntPtr eventDescPtr = GCHandle.Alloc(eventDesc, GCHandleType.Pinned).AddrOfPinnedObject();
 
+            // Get the Buffer Size So the Buffer Can Be Allocated
             int result = TdhGetManifestEventInformation(provGuidPtr, eventDescPtr, IntPtr.Zero, ref bufferSize);
+            switch (result)
+            {
+                case 122:
+                    // ERROR_INSUFFICIENT_BUFFER
+                    break;
+                case 87:
+                    // ERROR_INVALID_PARAMETER
+                    throw new ArgumentException("Invalid parameters for TdhGetManifestEventInformation.");
+                case 1168:
+                    // ERROR_NOT_FOUND
+                    throw new FileNotFoundException($"Manifest for {providerGuid} not found.");
+                default:
+                    throw new Win32Exception(result, "Failed to get manifest event information.");
+            }
 
             if (bufferSize > 0)
             {
+                // Allocate buffer for event info
                 IntPtr eventInfoBuffer = Marshal.AllocHGlobal(bufferSize);
+
                 try
                 {
                     result = TdhGetManifestEventInformation(provGuidPtr, eventDescPtr, eventInfoBuffer, ref bufferSize);
-                    if (result == 0) // SUCCESS
+                    if (result != 0)
                     {
-                        // Parse the TRACE_EVENT_INFO structure to get property info
-                        var eventInfo = Marshal.PtrToStructure<TRACE_EVENT_INFO>(eventInfoBuffer);
+                        throw new Win32Exception(result, $"Failed to get manifest event information : LRESULT: {result}.");
+                    }
 
-                        // Get property count
-                        uint propertyCount = eventInfo.PropertyCount;
-                        IntPtr propertyArrayPtr = IntPtr.Add(eventInfoBuffer, Marshal.SizeOf<TRACE_EVENT_INFO>());
+                    // Parse the TRACE_EVENT_INFO structure to get property info
+                    TRACE_EVENT_INFO eventInfo = Marshal.PtrToStructure<TRACE_EVENT_INFO>(eventInfoBuffer);
+
+                    // Value The Provider Guid In the eventInfo
+                    if (eventInfo.ProviderGuid != providerGuid)
+                    {
+                        throw new InvalidOperationException("Provider GUID mismatch.");
+                    }
+
+                    // eventInfo is already defined as TRACE_EVENT_INFO
+                    EVENT_DESCRIPTOR eventDescriptor = eventInfo.EventDescriptor;
+
+                    if (eventDescriptor.Id != eventId)
+                    {
+                        throw new InvalidOperationException($"Event ID mismatch: expected {eventId}, got {eventDescriptor.Id}.");
+                    }
+
+                    // Get property count
+                    uint propertyCount = eventInfo.PropertyCount;
+
+                    if (propertyCount > 0)
+                    {
+                        int eventTraceInfoBaseSize = Marshal.SizeOf<TRACE_EVENT_INFO>();
+
+                        // The TRACE_EVENT_INFO structure is followed by an array of EVENT_PROPERTY_INFO structures, but the structure is not always tightly
+                        // packed due to alignment requirements.On 64 - bit systems, the actual start of the property array may be aligned to an 8 - byte
+                        // boundary after the end of TRACE_EVENT_INFO.
+                        long propertyArrayOffset = (eventTraceInfoBaseSize + 7) & ~7L;
+
+                        IntPtr propertyArrayPtrStart = IntPtr.Add(eventInfoBuffer, (int)propertyArrayOffset);
 
                         // Parse each property
                         for (uint i = 0; i < propertyCount; i++)
                         {
-                            IntPtr propertyInfoPtr = IntPtr.Add(propertyArrayPtr, (int)(i * Marshal.SizeOf<EVENT_PROPERTY_INFO>()));
-                            var propInfo = Marshal.PtrToStructure<EVENT_PROPERTY_INFO>(propertyInfoPtr);
+                            UserDataColumn column = new UserDataColumn();
 
-                            var column = new UserDataColumn
-                            {
-                                Name = GetStringFromOffset(eventInfoBuffer, propInfo.NameOffset),
-                                DataType = MapEtwTypeToNetType(propInfo.InType),
-                                Length = (int)propInfo.Length,
-                                IsArray = (propInfo.Flags & PropertyFlags.ParamCount) == PropertyFlags.ParamCount,
-                                ArrayCount = propInfo.Count
-                            };
+                            int eventPropertyInfoBaseSize = Marshal.SizeOf<EVENT_PROPERTY_INFO>();
 
-                            // Check if it has a map (enum values)
-                            if (propInfo.MapNameOffset != 0)
+                            // 24 is right, this works.  Don't ASK me why.
+                            eventPropertyInfoBaseSize = 24;
+
+                            int propertyOffset = (int)(i * eventPropertyInfoBaseSize);
+                            IntPtr propertyInfoPtr = IntPtr.Add(propertyArrayPtrStart, propertyOffset);
+                            EVENT_PROPERTY_INFO propInfo = Marshal.PtrToStructure<EVENT_PROPERTY_INFO>(propertyInfoPtr);
+
+                            try
                             {
-                                string mapName = GetStringFromOffset(eventInfoBuffer, propInfo.MapNameOffset);
-                                column.EnumValues = GetEnumValuesFromMap(providerGuid, eventId, mapName);
+                                string name = GetStringFromOffset(eventInfoBuffer, propInfo.NameOffset);
+                                var dataType = MapEtwTypeToNetType(propInfo.InType);
+
+                                column.Name = name;
+                                column.DataType = dataType;
+                                column.Length = (int)propInfo.Length;
+                                column.IsArray = (propInfo.Flags & PropertyFlags.ParamCount) == PropertyFlags.ParamCount;
+                                column.ArrayCount = propInfo.Count;
+
+                                // Check if it has a map (enum values)
+                                if (propInfo.MapNameOffset != 0)
+                                {
+                                    string mapName = GetStringFromOffset(eventInfoBuffer, propInfo.MapNameOffset);
+                                    column.EnumValues = GetEnumValuesFromMap(providerGuid, eventId, mapName);
+                                }
+
+                                column.Status = UserDataColumnStatus.Valid;
+                            }
+                            catch (Exception ex)
+                            {
+                                column.Status = UserDataColumnStatus.Invalid;
+
+                                // Handle any exceptions that occur while processing properties
+                                Console.WriteLine($"Error processing event id: {eventId} property {i}: {ex.Message}");
                             }
 
                             columns.Add(column);
                         }
-                    }
-                    else
-                    {
-                        throw new Win32Exception(result, "Failed to get manifest event information.");
+
+                        if (columns.All(c => c.Status == UserDataColumnStatus.Valid))
+                        {
+                            Console.WriteLine($"Successfully processing event id: {eventId}: Properties: {propertyCount}: [{string.Join(",", columns.Select(c => c.Name))}]");
+                        }
                     }
                 }
                 finally
@@ -613,48 +740,6 @@ namespace ETWWebService
             }
 
             return result;
-        }
-
-        /// <summary>
-        /// Example usage method that demonstrates how to use the class.
-        /// </summary>
-        public void ExampleUsage()
-        {
-            try
-            {
-                // Or by provider GUID
-                Guid providerGuid = new Guid("22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716"); // Example GUID
-                var schema = GetUserDataSchema(providerGuid);
-
-                // For each event in the schema
-                foreach (var eventEntry in schema.EnumerateEvents())
-                {
-                    Console.WriteLine($"Event ID: {eventEntry.Key}");
-                    Console.WriteLine("Columns:");
-
-                    foreach (var column in eventEntry.Value)
-                    {
-                        Console.WriteLine($"  - {column.Name} ({column.DataType.Name}){(column.IsArray ? "[]" : "")}");
-                    }
-
-                    Console.WriteLine();
-                }
-
-                // Example parsing of blob data
-                // This would come from actual ETW event data
-                byte[] sampleBlobData = new byte[100]; // Simulated blob data
-
-                var firstEventColumns = schema.GetEventColumns(schema.EventIds.First());
-                var parsedData = ParseUserDataBlob(sampleBlobData, firstEventColumns);
-                foreach (var item in parsedData)
-                {
-                    Console.WriteLine($"{item.Key}: {item.Value}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Error: {ex.Message}");
-            }
         }
     }
 }

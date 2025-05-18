@@ -1,4 +1,8 @@
-﻿using Microsoft.Diagnostics.Tracing;
+﻿// <copyright file="Program.cs" company="Wayne Walter Berry">
+// Copyright (c) Wayne Walter Berry. All rights reserved.
+// </copyright>
+
+using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Session;
 using System;
 using System.IO;
@@ -9,6 +13,15 @@ using System.Threading.Tasks;
 
 namespace ETWWebService
 {
+    /// <summary>
+    /// Runs a local HTTP server that listens for requests to stream ETW events.
+    /// ETW Manifests are loaded from the operation system to get the schema for the events.
+    /// The server can be accessed via a web browser or any HTTP client, it is intended for local use only.
+    /// This code doesn't load .etl files, it only listens to the current active ETW providers.
+    /// For a list of ETW providers, that have registered manifests, use the command: logman.exe query providers
+    /// The events are streamed in real-time to the client as they are generated, to stop listening
+    /// to events, the client can close the connection or navigate away from the page.
+    /// </summary>
     internal class Program
     {
         private static EtwManifestUserDataReader etwManifestUserDataReader = new EtwManifestUserDataReader();
@@ -26,6 +39,7 @@ namespace ETWWebService
                 Console.WriteLine($"Listening for requests at {Url}");
                 Console.WriteLine("Usage: http://localhost:5000/?[ETWProviderName]");
                 Console.WriteLine($"Example: http://localhost:5000/?{DefaultProvider}");
+                Console.WriteLine($"Example: http://localhost:5000/?C6C5265F-EAE8-4650-AAE4-9D48603D8510");
                 Console.WriteLine("Press Ctrl+C to exit");
 
                 while (true)
@@ -44,6 +58,10 @@ namespace ETWWebService
             }
         }
 
+        /// <summary>
+        /// Processes the incoming HTTP request and streams ETW events to the client.
+        /// </summary>
+        /// <param name="context">Http Listener Context</param>
         static async Task ProcessRequestAsync(HttpListenerContext context)
         {
             HttpListenerRequest request = context.Request;
@@ -53,10 +71,22 @@ namespace ETWWebService
 
             // Extract provider name from query string
             string providerInput = DefaultProvider;
-            if (request.QueryString.Count > 0 && !string.IsNullOrEmpty(request.QueryString.Keys[0]))
+            if (request.QueryString.Count > 0)
             {
-                // First segment is the provider name
-                providerInput = request.QueryString.Keys[0];
+                if (!string.IsNullOrEmpty(request.QueryString.Keys[0]))
+                {
+                    // Handle case where the GUID is the key (/?GUID)
+                    providerInput = request.QueryString.Keys[0];
+                }
+                else if (!string.IsNullOrEmpty(request.RawUrl) && request.RawUrl.Contains("?"))
+                {
+                    // Handle case where the GUID is directly after ? with no key name
+                    string queryPart = request.RawUrl.Split('?')[1];
+                    if (!string.IsNullOrEmpty(queryPart))
+                    {
+                        providerInput = queryPart;
+                    }
+                }
             }
 
             // User can pass in the GUID or provider Name.
@@ -95,11 +125,19 @@ namespace ETWWebService
                             await writer.WriteAsync($"<h1>ETW Events for Provider: {WebUtility.HtmlEncode(providerInput)}</h1>");
                             await writer.FlushAsync();
 
-                            _session.Source.Dynamic.All += async (TraceEvent data) =>
+                            _session.Source.Dynamic.All += async (TraceEvent traceEvent) =>
                             {
+                                var userData = etwManifestUserDataReader.ParseTraceEventUserData(etwUserDataSchema, traceEvent);
+
                                 // Format and store the event information
-                                string eventInfo = $"Provider: {data.ProviderName}, ID: {data.ID}, Time: {data.TimeStamp}, " +
-                                                  $"Process: {data.ProcessID}, Thread: {data.ThreadID}, Event: {data.EventName}";
+                                string eventInfo =
+                                    $"Provider: {traceEvent.ProviderName}, ID: {traceEvent.ID}, Time: {traceEvent.TimeStamp}, " +
+                                    $"Process: {traceEvent.ProcessID}, Thread: {traceEvent.ThreadID}, Event: {traceEvent.EventName}";
+                                    
+                                foreach(var key in userData.Keys)
+                                {
+                                    eventInfo += $", {key}: {userData[key]}";
+                                }
 
                                 try
                                 {
