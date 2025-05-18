@@ -1,17 +1,21 @@
-using Microsoft.Diagnostics.Tracing;
-using Microsoft.Win32;
-using System;
-using System.Collections;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data.Common;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
+// <copyright file="EtwManifestUserDataReader.cs" company="Wayne Walter Berry">
+// Copyright (c) Wayne Walter Berry. All rights reserved.
+// </copyright>
 
 namespace ETWWebService
 {
+    using System;
+    using System.Collections;
+    using System.Collections.Generic;
+    using System.ComponentModel;
+    using System.Data.Common;
+    using System.IO;
+    using System.Linq;
+    using System.Runtime.InteropServices;
+    using System.Text;
+    using Microsoft.Diagnostics.Tracing;
+    using Microsoft.Win32;
+
     /// <summary>
     /// Provides functionality to read UserData sections from registered ETW manifests
     /// and parse blob data into structured columns.
@@ -102,19 +106,7 @@ namespace ETWWebService
             public uint Reserved;
         }
 
-        [Flags]
-        private enum PropertyFlags : uint
-        {
-            None = 0,
-            Struct = 0x1,
-            ParamLength = 0x2,
-            ParamCount = 0x4,
-            WBEMXMLFragment = 0x8,
-            ParamFixedLength = 0x10,
-            ParamFixedCount = 0x20,
-            HasTags = 0x40,
-            HasCustomSchema = 0x80
-        }
+
 
         private enum EVENT_FIELD_TYPE : ushort
         {
@@ -191,32 +183,6 @@ namespace ETWWebService
 
         #endregion
 
-        public enum UserDataColumnStatus
-        {
-            Unknown = 0,
-            Valid = 1,
-            Invalid = 2,
-        }
-
-        /// <summary>
-        /// Represents a column in the UserData section.
-        /// </summary>
-        public class UserDataColumn
-        {
-            public string Name { get; set; }
-            public Type DataType { get; set; }
-            public int Length { get; set; }
-            public bool IsArray { get; set; }
-            public uint ArrayCount { get; set; }
-            public Dictionary<string, string> EnumValues { get; set; }
-            public UserDataColumnStatus Status { get; set; }
-
-            public UserDataColumn()
-            {
-                EnumValues = new Dictionary<string, string>();
-                Status = UserDataColumnStatus.Unknown;
-            }
-        }
 
         /// <summary>
         /// Retrieves UserData schema from an ETW manifest by provider GUID.
@@ -328,6 +294,9 @@ namespace ETWWebService
                 case 87:
                     // ERROR_INVALID_PARAMETER
                     throw new ArgumentException("Invalid parameters for TdhGetManifestEventInformation.");
+                case 1168:
+                    // ERROR_NOT_FOUND
+                    throw new FileNotFoundException($"Manifest for {providerGuid} not found.");
                 default:
                     throw new Win32Exception(result, "Failed to get manifest event information.");
             }
@@ -423,7 +392,7 @@ namespace ETWWebService
 
                         if (columns.All(c => c.Status == UserDataColumnStatus.Valid))
                         {
-                            Console.WriteLine($"Successfully processing event id: {eventId}: Properties: {propertyCount}: [{string.Join(",", columns.Select(c=>c.Name))}]");
+                            Console.WriteLine($"Successfully processing event id: {eventId}: Properties: {propertyCount}: [{string.Join(",", columns.Select(c => c.Name))}]");
                         }
                     }
                 }

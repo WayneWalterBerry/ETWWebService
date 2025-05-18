@@ -26,6 +26,7 @@ namespace ETWWebService
                 Console.WriteLine($"Listening for requests at {Url}");
                 Console.WriteLine("Usage: http://localhost:5000/?[ETWProviderName]");
                 Console.WriteLine($"Example: http://localhost:5000/?{DefaultProvider}");
+                Console.WriteLine($"Example: http://localhost:5000/?C6C5265F-EAE8-4650-AAE4-9D48603D8510");
                 Console.WriteLine("Press Ctrl+C to exit");
 
                 while (true)
@@ -53,10 +54,22 @@ namespace ETWWebService
 
             // Extract provider name from query string
             string providerInput = DefaultProvider;
-            if (request.QueryString.Count > 0 && !string.IsNullOrEmpty(request.QueryString.Keys[0]))
+            if (request.QueryString.Count > 0)
             {
-                // First segment is the provider name
-                providerInput = request.QueryString.Keys[0];
+                if (!string.IsNullOrEmpty(request.QueryString.Keys[0]))
+                {
+                    // Handle case where the GUID is the key (/?GUID)
+                    providerInput = request.QueryString.Keys[0];
+                }
+                else if (!string.IsNullOrEmpty(request.RawUrl) && request.RawUrl.Contains("?"))
+                {
+                    // Handle case where the GUID is directly after ? with no key name
+                    string queryPart = request.RawUrl.Split('?')[1];
+                    if (!string.IsNullOrEmpty(queryPart))
+                    {
+                        providerInput = queryPart;
+                    }
+                }
             }
 
             // User can pass in the GUID or provider Name.

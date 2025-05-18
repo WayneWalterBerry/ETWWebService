@@ -31,3 +31,7 @@ using System.Runtime.InteropServices;
 //
 [assembly: AssemblyVersion("1.0.0.0")]
 [assembly: AssemblyFileVersion("1.0.0.0")]
+
+// Allow test project to access internal members of this assembly
+[assembly: InternalsVisibleTo("ETWWebService.Tests")]
+

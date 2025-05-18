@@ -1,10 +1,14 @@
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using System;
-using System.IO;
-using System.Linq;
+// <copyright file="EtwManifestUserDataReaderTests.cs" company="Wayne Walter Berry">
+// Copyright (c) Wayne Walter Berry. All rights reserved.
+// </copyright>
 
 namespace ETWWebService.Tests
 {
+    using Microsoft.VisualStudio.TestTools.UnitTesting;
+    using System;
+    using System.IO;
+    using System.Linq;
+
     [TestClass]
     public class EtwManifestUserDataReaderTests
     {
@@ -67,7 +71,7 @@ namespace ETWWebService.Tests
                 Assert.AreEqual(columns.Count, outColumns.Count, "Column counts should match");
             }
         }
-        
+
         [TestMethod]
         public void GetUserDataSchema_WithInvalidGuid_ReturnsEmptySchema()
         {
