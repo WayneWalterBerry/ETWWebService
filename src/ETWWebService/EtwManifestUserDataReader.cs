@@ -4,6 +4,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Data.Common;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -47,16 +48,57 @@ namespace ETWWebService
             IntPtr EventMapInfo,
             ref int BufferSize);
 
+        /// <summary>
+        /// Represents information about a property in an ETW event.
+        /// This structure follows the Windows EVENT_PROPERTY_INFO layout and is part of the data
+        /// returned by TdhGetManifestEventInformation.
+        /// </summary>
         [StructLayout(LayoutKind.Sequential)]
         private struct EVENT_PROPERTY_INFO
         {
+            /// <summary>
+            /// Flags that specify characteristics of the property, such as whether it's a struct,
+            /// has a length parameter, or has a count parameter.
+            /// </summary>
             public PropertyFlags Flags;
+
+            /// <summary>
+            /// Offset from the beginning of the TRACE_EVENT_INFO buffer to the null-terminated 
+            /// Unicode string that contains the property name.
+            /// </summary>
             public uint NameOffset;
+
+            /// <summary>
+            /// The input type of the property as defined in the manifest.
+            /// </summary>
             public EVENT_FIELD_TYPE InType;
+
+            /// <summary>
+            /// The output type of the property after any type conversion is performed.
+            /// </summary>
             public EVENT_FIELD_TYPE OutType;
+
+            /// <summary>
+            /// Offset from the beginning of the TRACE_EVENT_INFO buffer to the null-terminated 
+            /// Unicode string that contains the name of a value map. Only valid if the property
+            /// has a value map; otherwise, this member is 0.
+            /// </summary>
             public uint MapNameOffset;
+
+            /// <summary>
+            /// The number of elements in an array if the property is an array type,
+            /// or the count of a variable-length property.
+            /// </summary>
             public uint Count;
+
+            /// <summary>
+            /// The length of the property in bytes, if it's a fixed-length property.
+            /// </summary>
             public uint Length;
+
+            /// <summary>
+            /// Reserved for future use.
+            /// </summary>
             public uint Reserved;
         }
 
@@ -149,6 +191,13 @@ namespace ETWWebService
 
         #endregion
 
+        public enum UserDataColumnStatus
+        {
+            Unknown = 0,
+            Valid = 1,
+            Invalid = 2,
+        }
+
         /// <summary>
         /// Represents a column in the UserData section.
         /// </summary>
@@ -160,10 +209,12 @@ namespace ETWWebService
             public bool IsArray { get; set; }
             public uint ArrayCount { get; set; }
             public Dictionary<string, string> EnumValues { get; set; }
+            public UserDataColumnStatus Status { get; set; }
 
             public UserDataColumn()
             {
                 EnumValues = new Dictionary<string, string>();
+                Status = UserDataColumnStatus.Unknown;
             }
         }
 
@@ -303,6 +354,14 @@ namespace ETWWebService
                         throw new InvalidOperationException("Provider GUID mismatch.");
                     }
 
+                    // eventInfo is already defined as TRACE_EVENT_INFO
+                    EVENT_DESCRIPTOR eventDescriptor = eventInfo.EventDescriptor;
+
+                    if (eventDescriptor.Id != eventId)
+                    {
+                        throw new InvalidOperationException($"Event ID mismatch: expected {eventId}, got {eventDescriptor.Id}.");
+                    }
+
                     // Get property count
                     uint propertyCount = eventInfo.PropertyCount;
 
@@ -315,39 +374,56 @@ namespace ETWWebService
                         // boundary after the end of TRACE_EVENT_INFO.
                         long propertyArrayOffset = (eventTraceInfoBaseSize + 7) & ~7L;
 
-                        IntPtr propertyArrayPtr = IntPtr.Add(eventInfoBuffer, (int)propertyArrayOffset);
+                        IntPtr propertyArrayPtrStart = IntPtr.Add(eventInfoBuffer, (int)propertyArrayOffset);
 
                         // Parse each property
                         for (uint i = 0; i < propertyCount; i++)
                         {
+                            UserDataColumn column = new UserDataColumn();
+
                             int eventPropertyInfoBaseSize = Marshal.SizeOf<EVENT_PROPERTY_INFO>();
 
-                            // 8-byte alignment
-                            eventPropertyInfoBaseSize = (eventPropertyInfoBaseSize + 7) & ~7;
+                            // 24 is right, this works.  Don't ASK me why.
+                            eventPropertyInfoBaseSize = 24;
+
                             int propertyOffset = (int)(i * eventPropertyInfoBaseSize);
-                            IntPtr propertyInfoPtr = IntPtr.Add(propertyArrayPtr, propertyOffset);
+                            IntPtr propertyInfoPtr = IntPtr.Add(propertyArrayPtrStart, propertyOffset);
                             EVENT_PROPERTY_INFO propInfo = Marshal.PtrToStructure<EVENT_PROPERTY_INFO>(propertyInfoPtr);
 
-                            string name = GetStringFromOffset(eventInfoBuffer, propInfo.NameOffset);
-
-                            var column = new UserDataColumn
+                            try
                             {
-                                Name = name,
-                                DataType = MapEtwTypeToNetType(propInfo.InType),
-                                Length = (int)propInfo.Length,
-                                IsArray = (propInfo.Flags & PropertyFlags.ParamCount) == PropertyFlags.ParamCount,
-                                ArrayCount = propInfo.Count
-                            };
+                                string name = GetStringFromOffset(eventInfoBuffer, propInfo.NameOffset);
+                                var dataType = MapEtwTypeToNetType(propInfo.InType);
 
-                            // Check if it has a map (enum values)
-                            if (propInfo.MapNameOffset != 0)
+                                column.Name = name;
+                                column.DataType = dataType;
+                                column.Length = (int)propInfo.Length;
+                                column.IsArray = (propInfo.Flags & PropertyFlags.ParamCount) == PropertyFlags.ParamCount;
+                                column.ArrayCount = propInfo.Count;
+
+                                // Check if it has a map (enum values)
+                                if (propInfo.MapNameOffset != 0)
+                                {
+                                    string mapName = GetStringFromOffset(eventInfoBuffer, propInfo.MapNameOffset);
+                                    column.EnumValues = GetEnumValuesFromMap(providerGuid, eventId, mapName);
+                                }
+
+                                column.Status = UserDataColumnStatus.Valid;
+                            }
+                            catch (Exception ex)
                             {
-                                uint mapNameOffset = (propInfo.MapNameOffset + 7) & ~7U;
-                                string mapName = GetStringFromOffset(eventInfoBuffer, mapNameOffset);
-                                column.EnumValues = GetEnumValuesFromMap(providerGuid, eventId, mapName);
+                                column.Status = UserDataColumnStatus.Invalid;
+
+                                // Handle any exceptions that occur while processing properties
+                                Console.WriteLine($"Error processing event id: {eventId} property {i}: {ex.Message}");
                             }
 
                             columns.Add(column);
+                        }
+
+                        if (columns.All(c => c.Status == UserDataColumnStatus.Valid))
+                        {
+                            Console.WriteLine($"Successfully processing event id: {eventId}: Properties: {propertyCount}: [{string.Join(",", columns.Select(c=>c.Name))}]");
                         }
                     }
                 }
