@@ -1,4 +1,8 @@
-﻿using Microsoft.Diagnostics.Tracing;
+﻿// <copyright file="Program.cs" company="Wayne Walter Berry">
+// Copyright (c) Wayne Walter Berry. All rights reserved.
+// </copyright>
+
+using Microsoft.Diagnostics.Tracing;
 using Microsoft.Diagnostics.Tracing.Session;
 using System;
 using System.IO;
@@ -9,6 +13,15 @@ using System.Threading.Tasks;
 
 namespace ETWWebService
 {
+    /// <summary>
+    /// Runs a local HTTP server that listens for requests to stream ETW events.
+    /// ETW Manifests are loaded from the operation system to get the schema for the events.
+    /// The server can be accessed via a web browser or any HTTP client, it is intended for local use only.
+    /// This code doesn't load .etl files, it only listens to the current active ETW providers.
+    /// For a list of ETW providers, that have registered manifests, use the command: logman.exe query providers
+    /// The events are streamed in real-time to the client as they are generated, to stop listening
+    /// to events, the client can close the connection or navigate away from the page.
+    /// </summary>
     internal class Program
     {
         private static EtwManifestUserDataReader etwManifestUserDataReader = new EtwManifestUserDataReader();
@@ -45,6 +58,10 @@ namespace ETWWebService
             }
         }
 
+        /// <summary>
+        /// Processes the incoming HTTP request and streams ETW events to the client.
+        /// </summary>
+        /// <param name="context">Http Listener Context</param>
         static async Task ProcessRequestAsync(HttpListenerContext context)
         {
             HttpListenerRequest request = context.Request;
