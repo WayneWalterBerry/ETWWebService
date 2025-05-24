@@ -39,7 +39,7 @@ namespace ETWWebService
                 Console.WriteLine($"Listening for requests at {Url}");
                 Console.WriteLine("Usage: http://localhost:5000/?[ETWProviderName]");
                 Console.WriteLine($"Example: http://localhost:5000/?{DefaultProvider}");
-                Console.WriteLine($"Example: http://localhost:5000/?C6C5265F-EAE8-4650-AAE4-9D48603D8510");
+                Console.WriteLine($"Example: http://localhost:5000/?A356D4CC-CDAC-4894-A93D-35C4C3F84944");
                 Console.WriteLine("Press Ctrl+C to exit");
 
                 while (true)
