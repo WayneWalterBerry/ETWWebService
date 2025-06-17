@@ -2,17 +2,17 @@
 // Copyright (c) Wayne Walter Berry. All rights reserved.
 // </copyright>
 
-using Microsoft.Diagnostics.Tracing;
-using Microsoft.Diagnostics.Tracing.Session;
-using System;
-using System.IO;
-using System.Net;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-
 namespace ETWWebService
 {
+    using System;
+    using System.IO;
+    using System.Net;
+    using System.Text;
+    using System.Threading;
+    using System.Threading.Tasks;
+    using Microsoft.Diagnostics.Tracing;
+    using Microsoft.Diagnostics.Tracing.Session;
+
     /// <summary>
     /// Runs a local HTTP server that listens for requests to stream ETW events.
     /// ETW Manifests are loaded from the operation system to get the schema for the events.
@@ -41,7 +41,7 @@ namespace ETWWebService
                 Console.WriteLine($"Example: http://localhost:5000/?{DefaultProvider}");
                 Console.WriteLine($"Example: http://localhost:5000/?A356D4CC-CDAC-4894-A93D-35C4C3F84944");
                 Console.WriteLine($"Example: http://localhost:5000/?FE595A38-23DD-434D-BBCE-EAB7CA88C40F");
-                
+
                 Console.WriteLine("Press Ctrl+C to exit");
 
                 while (true)
@@ -135,15 +135,35 @@ namespace ETWWebService
                                 string eventInfo =
                                     $"Provider: {traceEvent.ProviderName}, ID: {traceEvent.ID}, Time: {traceEvent.TimeStamp}, " +
                                     $"Process: {traceEvent.ProcessID}, Thread: {traceEvent.ThreadID}, Event: {traceEvent.EventName}";
-                                    
-                                foreach(var key in userData.Keys)
+
+                                foreach (var key in userData.Keys)
                                 {
-                                    eventInfo += $", {key}: {userData[key]}";
+                                    string value = userData[key];
+                                    if (key == "HRESULT" && int.TryParse(value, out int hresultInt))
+                                    {
+                                        eventInfo += $", {key}: 0x{hresultInt:X8}";
+                                    }
+                                    else
+                                    {
+                                        eventInfo += $", {key}: {value}";
+                                    }
+                                }
+
+                                // Check for Level and set style if needed
+                                string style = "";
+                                switch (traceEvent.Level)
+                                {
+                                    case TraceEventLevel.Error:
+                                        style = " style=\"color:red\"";
+                                        break;
+                                    case TraceEventLevel.Warning:
+                                        style = " style=\"color:yellow\"";
+                                        break;
                                 }
 
                                 try
                                 {
-                                    await writer.WriteAsync($"<p>{WebUtility.HtmlEncode(eventInfo)}</p>");
+                                    await writer.WriteAsync($"<p{style}>{WebUtility.HtmlEncode(eventInfo)}</p>");
                                     await writer.FlushAsync();
                                 }
                                 catch (Exception)
@@ -151,7 +171,8 @@ namespace ETWWebService
                                     // Handle the case where the client disconnects
                                     cancellationTokenSource.Cancel();
                                 }
-                            };
+                            }
+                        ;
 
                             await Task.Run(() => _session.Source.Process(), cancellationTokenSource.Token);
                         }

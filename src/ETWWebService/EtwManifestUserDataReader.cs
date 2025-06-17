@@ -727,9 +727,6 @@ namespace ETWWebService
             }
             catch (Exception ex)
             {
-                // Log error but don't throw - return what we can from payload
-                result["__ParseError"] = ex.Message;
-
                 // Fallback to payload data
                 for (int i = 0; i < traceEvent.PayloadNames.Length; i++)
                 {
